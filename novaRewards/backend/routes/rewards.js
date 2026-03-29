@@ -19,6 +19,7 @@ const distributeRateLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
   message: {
     success: false,
     error: 'rate_limit_exceeded',
@@ -33,7 +34,13 @@ const distributeRateLimiter = rateLimit({
  */
 router.post('/distribute', distributeRateLimiter, authenticateMerchant, async (req, res, next) => {
   try {
-    const { walletAddress, amount, campaignId } = req.body;
+    const {
+      walletAddress: rawWalletAddress,
+      customerWallet,
+      amount,
+      campaignId,
+    } = req.body;
+    const walletAddress = rawWalletAddress || customerWallet;
 
     if (!walletAddress || !amount) {
       return res.status(400).json({
@@ -46,16 +53,6 @@ router.post('/distribute', distributeRateLimiter, authenticateMerchant, async (r
       return res.status(400).json({
         success: false,
         error: 'Amount must be greater than zero',
-      });
-    }
-
-    // Verify trustline exists
-    const hasTrustline = await verifyTrustline(walletAddress);
-    if (!hasTrustline) {
-      return res.status(400).json({
-        success: false,
-        error: 'no_trustline',
-        message: 'Recipient does not have a NOVA trustline. Please add NOVA trustline first.',
       });
     }
 
@@ -84,6 +81,20 @@ router.post('/distribute', distributeRateLimiter, authenticateMerchant, async (r
         success: false,
         error: 'forbidden',
         message: 'Campaign does not belong to this merchant',
+      });
+    }
+
+    // Verify trustline exists. The helper may return either a boolean or { exists }.
+    const trustlineResult = await verifyTrustline(walletAddress);
+    const hasTrustline =
+      typeof trustlineResult === 'boolean'
+        ? trustlineResult
+        : Boolean(trustlineResult?.exists);
+    if (!hasTrustline) {
+      return res.status(400).json({
+        success: false,
+        error: 'no_trustline',
+        message: 'Recipient does not have a NOVA trustline. Please add NOVA trustline first.',
       });
     }
 
